@@ -1,8 +1,8 @@
 $linuxUser = "azur11"
-$linuxPassword = "YourSecurePassword123!" | ConvertTo-SecureString -AsPlainText -Force
+$linuxPassword = "SecurePassword123!" | ConvertTo-SecureString -AsPlainText -Force
 $credential = New-Object System.Management.Automation.PSCredential ($linuxUser, $linuxPassword)
 $location = "uksouth"
-$resourceGroupName = "mate-azure-task-13" + (Get-Random -Minimum 100 -Maximum 999)
+$resourceGroupName = "mate-azure-task-13" #+ (Get-Random -Minimum 100 -Maximum 999)
 $networkSecurityGroupName = "defaultnsg"
 $virtualNetworkName = "vnet"
 $subnetName = "default"
@@ -15,6 +15,13 @@ $vmImage = "Ubuntu2204"
 $vmSize = "Standard_B1s"
 $dnsLabel = "matetask" + (Get-Random -Count 1)
 $keyPath = "$HOME\.ssh\$linuxUser"
+$dcrName = "MetricsCollection"
+# Установите контекст подписки
+Set-AzContext -SubscriptionId "bfdad413-15d5-486b-ae65-17059cb49357"
+# Регистрируем поставщик ресурсов Microsoft.Insights
+Register-AzResourceProvider -ProviderNamespace "Microsoft.Insights" | Out-Null
+# Проверяем статус регистрации
+Get-AzResourceProvider -ProviderNamespace "Microsoft.Insights" | Out-Null
 
 if (-not (Test-Path "$HOME\.ssh\$linuxUser.pub")) {
     Write-Host "SSh key not found. Generating SSH key..." -ForegroundColor Cyan
@@ -48,7 +55,7 @@ New-AzPublicIpAddress -Name $publicIpAddressName -ResourceGroupName $resourceGro
 
 # 6. Создание VM с System-Assigned Identity
 Write-Host "Creating a VM with System-Assigned Identity..." -ForegroundColor Cyan
-New-AzVm `
+$stats = New-AzVm `
   -ResourceGroupName $resourceGroupName `
   -Name $vmName `
   -Location $location `
@@ -60,9 +67,11 @@ New-AzVm `
   -SecurityGroupName $networkSecurityGroupName `
   -SshKeyName $sshKeyName `
   -PublicIpAddressName $publicIpAddressName `
-  -SystemAssignedIdentity
+  -SystemAssignedIdentity | Out-Null
 
-Write-Host "Installing the TODO web app..." -ForegroundColor Cyan
+Write-Host "Installed VM: $($stats.ProvisioningState)" -ForegroundColor Cyan
+
+Write-Host "`nInstalling the TODO web app..." -ForegroundColor Cyan
 $Params = @{
     ResourceGroupName = $resourceGroupName
     VMName = $vmName
@@ -77,14 +86,6 @@ $Params = @{
 }
 Set-AzVMExtension @Params
 
-# Создаём Log Analytics Workspace
-Write-Host "Creating Log Analytics Workspace..." -ForegroundColor Cyan
-New-AzOperationalInsightsWorkspace `
-    -ResourceGroupName $resourceGroupName `
-    -Name "monitor-workspace" `
-    -Location $location `
-    -Sku "PerGB2018"
-
 # Устанавливаем Azure Monitor Agent
 Write-Host "Installing Azure Monitor Agent..." -ForegroundColor Cyan
 Set-AzVMExtension `
@@ -96,4 +97,88 @@ Set-AzVMExtension `
     -TypeHandlerVersion '1.9' `
     -Location $location
 
-Write-Host "Deployment completed!" -ForegroundColor Gree
+# Создаём Log Analytics Workspace
+Write-Host "Creating Log Analytics Workspace..." -ForegroundColor Cyan
+$workspace = New-AzOperationalInsightsWorkspace `
+    -ResourceGroupName $resourceGroupName `
+    -Name "monitor-workspace" `
+    -Location $location `
+    -Sku "PerGB2018"
+$workspaceResourceId = $workspace.ResourceId
+
+# Создаем определение DCR в формате JSON
+$dcrDefinition = @{
+    location   = $location
+    properties = @{
+        description = $description
+        dataSources = @{
+            syslog = @(
+                @{
+                    name         = "syslogDataSource"
+                    streams      = @("Microsoft-Syslog")
+                    facilityNames = @("auth", "syslog")
+                    logLevels    = @("Error", "Critical", "Alert")
+                }
+            )
+        }
+        destinations = @{
+            logAnalytics = @(
+                @{
+                    name               = "LogAnalyticsDestination"
+                    workspaceResourceId = $workspaceResourceId
+                    workspaceId       = $workspace.Name
+                }
+            )
+        }
+        dataFlows    = @(
+            @{
+                streams      = @("Microsoft-Syslog")
+                destinations = @("LogAnalyticsDestination")
+            }
+        )
+    }
+}
+
+# Конвертируем в JSON и сохраняем во временный файл
+$tempJsonFile = [System.IO.Path]::GetTempFileName()
+$dcrDefinition | ConvertTo-Json -Depth 6 | Out-File $tempJsonFile -Encoding utf8
+
+# Создаем правило сбора данных DCR
+try {
+    # Создание DCR
+    Write-Host "Creating DCR $dcrName..." -ForegroundColor Cyan
+    $dcr = New-AzDataCollectionRule -ResourceGroupName $resourceGroupName `
+                                   -Name $dcrName `
+                                   -JsonFilePath $tempJsonFile `
+                                   -ErrorAction Stop
+
+    Write-Host "DCR $dcrName created successfully." -ForegroundColor Green
+    $dcr | Format-List -Property Name,Location,ResourceGroupName,ProvisioningState
+}
+catch {
+    Write-Host "Error creating DCR:" -ForegroundColor Yellow
+    Write-Host $_.Exception.Message -ForegroundColor Yellow
+}
+finally {
+    # Удаляем временный файл
+    Remove-Item $tempJsonFile -ErrorAction SilentlyContinue
+}
+
+# Для привязки ко всем VM в resource group:
+$vm = Get-AzVM -ResourceGroupName $resourceGroupName
+foreach ($vm in $vms) {
+    $associationName = "dcr-association-$($vm.Name)"
+    # Проверяем, существует ли уже ассоциация
+    $existingAssociation = Get-AzDataCollectionRuleAssociation -TargetResourceId $vm.Id -AssociationName $associationName -ErrorAction SilentlyContinue
+
+    if (-not $existingAssociation) {
+        $association = New-AzDataCollectionRuleAssociation -TargetResourceId $vm.Id `
+            -AssociationName $associationName `
+            -RuleId $dcr.Id
+        Write-Host "Successfully associated DCR to VM $($vm.Name)" -ForegroundColor Green
+    } else {
+        Write-Host "Association already exists for VM $($vm.Name)" -ForegroundColor Yellow
+    }
+}
+
+Write-Host "Deployment completed!" -ForegroundColor Green
