@@ -1,5 +1,5 @@
 $linuxUser = "azur11"
-$linuxPassword = "SecurePassword123!" | ConvertTo-SecureString -AsPlainText -Force
+$linuxPassword = "SecurePassword1235!" | ConvertTo-SecureString -AsPlainText -Force
 $credential = New-Object System.Management.Automation.PSCredential ($linuxUser, $linuxPassword)
 $location = "uksouth"
 $resourceGroupName = "mate-azure-task-13" #+ (Get-Random -Minimum 100 -Maximum 999)
@@ -15,9 +15,9 @@ $vmImage = "Ubuntu2204"
 $vmSize = "Standard_B1s"
 $dnsLabel = "matetask" + (Get-Random -Count 1)
 $keyPath = "$HOME\.ssh\$linuxUser"
-$dcrName = "MetricsCollection"
-# Установите контекст подписки
-Set-AzContext -SubscriptionId (Get-AzSubscription).Id
+$dcrName = "MetricsCollection" + (Get-Random -Minimum 100 -Maximum 999)
+$SubscriptionId = (Get-AzSubscription).Id
+Set-AzContext -SubscriptionId $SubscriptionId
 # Регистрируем поставщик ресурсов Microsoft.Insights
 Register-AzResourceProvider -ProviderNamespace "Microsoft.Insights" | Out-Null
 # Проверяем статус регистрации
@@ -55,7 +55,7 @@ New-AzPublicIpAddress -Name $publicIpAddressName -ResourceGroupName $resourceGro
 
 # 6. Создание VM с System-Assigned Identity
 Write-Host "Creating a VM with System-Assigned Identity..." -ForegroundColor Cyan
-$stats = New-AzVm `
+New-AzVm `
   -ResourceGroupName $resourceGroupName `
   -Name $vmName `
   -Location $location `
@@ -68,8 +68,6 @@ $stats = New-AzVm `
   -SshKeyName $sshKeyName `
   -PublicIpAddressName $publicIpAddressName `
   -SystemAssignedIdentity | Out-Null
-
-Write-Host "Installed VM: $($stats.ProvisioningState)" -ForegroundColor Cyan
 
 Write-Host "`nInstalling the TODO web app..." -ForegroundColor Cyan
 $Params = @{
@@ -145,7 +143,6 @@ $dcrDefinition | ConvertTo-Json -Depth 6 | Out-File $tempJsonFile -Encoding utf8
 
 # Создаем правило сбора данных DCR
 try {
-    # Создание DCR
     Write-Host "Creating DCR $dcrName..." -ForegroundColor Cyan
     $dcr = New-AzDataCollectionRule -ResourceGroupName $resourceGroupName `
                                    -Name $dcrName `
