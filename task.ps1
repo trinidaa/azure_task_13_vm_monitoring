@@ -17,7 +17,7 @@ $dnsLabel = "matetask" + (Get-Random -Count 1)
 $keyPath = "$HOME\.ssh\$linuxUser"
 $dcrName = "MetricsCollection"
 # Установите контекст подписки
-Set-AzContext -SubscriptionId "bfdad413-15d5-486b-ae65-17059cb49357"
+Set-AzContext -SubscriptionId (Get-AzSubscription).Id
 # Регистрируем поставщик ресурсов Microsoft.Insights
 Register-AzResourceProvider -ProviderNamespace "Microsoft.Insights" | Out-Null
 # Проверяем статус регистрации
