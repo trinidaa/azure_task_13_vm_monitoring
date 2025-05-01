@@ -1,7 +1,7 @@
 $linuxUser = "azur11"
 $linuxPassword = "SecurePassword1235!" | ConvertTo-SecureString -AsPlainText -Force
 $credential = New-Object System.Management.Automation.PSCredential ($linuxUser, $linuxPassword)
-$location = "uksouth"
+$location = "ukwest"
 $resourceGroupName = "mate-azure-task-13" #+ (Get-Random -Minimum 100 -Maximum 999)
 $networkSecurityGroupName = "defaultnsg"
 $virtualNetworkName = "vnet"
@@ -20,8 +20,6 @@ $SubscriptionId = (Get-AzSubscription).Id
 Set-AzContext -SubscriptionId $SubscriptionId
 # Регистрируем поставщик ресурсов Microsoft.Insights
 Register-AzResourceProvider -ProviderNamespace "Microsoft.Insights" | Out-Null
-# Проверяем статус регистрации
-Get-AzResourceProvider -ProviderNamespace "Microsoft.Insights" | Out-Null
 
 if (-not (Test-Path "$HOME\.ssh\$linuxUser.pub")) {
     Write-Host "SSh key not found. Generating SSH key..." -ForegroundColor Cyan
@@ -162,12 +160,11 @@ finally {
 }
 
 # Для привязки ко всем VM в resource group:
-$vm = Get-AzVM -ResourceGroupName $resourceGroupName
+$vms = Get-AzVM -ResourceGroupName $resourceGroupName
 foreach ($vm in $vms) {
     $associationName = "dcr-association-$($vm.Name)"
     # Проверяем, существует ли уже ассоциация
     $existingAssociation = Get-AzDataCollectionRuleAssociation -TargetResourceId $vm.Id -AssociationName $associationName -ErrorAction SilentlyContinue
-
     if (-not $existingAssociation) {
         $association = New-AzDataCollectionRuleAssociation -TargetResourceId $vm.Id `
             -AssociationName $associationName `
